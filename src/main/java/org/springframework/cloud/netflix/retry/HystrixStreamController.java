@@ -20,8 +20,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.servlet.http.HttpServletResponse;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -30,12 +28,14 @@ import org.apache.commons.logging.LogFactory;
 
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.AttributeAccessor;
+import org.springframework.http.MediaType;
 import org.springframework.retry.RetryStatistics;
 import org.springframework.retry.policy.CircuitBreakerRetryPolicy;
 import org.springframework.retry.stats.ExponentialAverageRetryStatistics;
 import org.springframework.retry.stats.StatisticsRepository;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * @author Dave Syer
@@ -54,6 +54,8 @@ public class HystrixStreamController implements SmartLifecycle {
 
 	private final ObjectMapper objectMapper;
 
+	private final List<SseEmitter> emitters = new ArrayList<>();
+
 	public HystrixStreamController(StatisticsRepository repository,
 			ObjectMapper objectMapper) {
 		this.repository = repository;
@@ -61,57 +63,10 @@ public class HystrixStreamController implements SmartLifecycle {
 	}
 
 	@RequestMapping(path = "/hystrix.stream", produces = "text/event-stream")
-	public void handle(HttpServletResponse response) {
-		response.setHeader("Content-Type", "text/event-stream;charset=UTF-8");
-		response.setHeader("Cache-Control",
-				"no-cache, no-store, max-age=0, must-revalidate");
-		response.setHeader("Pragma", "no-cache");
-		try {
-			while (running) {
-				List<String> jsonMessages = fetchMetrics();
-				if (jsonMessages.isEmpty()) {
-					response.getWriter().println("ping: \n");
-				}
-				else {
-					for (String json : jsonMessages) {
-						response.getWriter().println("data: " + json + "\n");
-					}
-				}
-
-				/* shortcut breaking out of loop if we have been destroyed */
-				if (!running) {
-					break;
-				}
-
-				// after outputting all the messages we will flush the stream
-				response.flushBuffer();
-
-				// explicitly check for client disconnect - PrintWriter does not throw
-				// exceptions
-				if (response.getWriter().checkError()) {
-					throw new IOException("io error");
-				}
-
-				// now wait the 'delay' time
-				Thread.sleep(delay);
-			}
-		}
-		catch (InterruptedException e) {
-			stop();
-			logger.debug("InterruptedException.");
-			Thread.currentThread().interrupt();
-		}
-		catch (IOException e) {
-			// debug instead of error as we expect to get these whenever a client
-			// disconnects or network issue occurs
-			logger.debug(
-					"IOException while trying to write (generally caused by client disconnecting).",
-					e);
-		}
-		catch (Exception e) {
-			logger.error("Failed to write Hystrix metrics.", e);
-		}
-		logger.debug("Stopping stream to connection");
+	public SseEmitter handle() {
+		SseEmitter emitter = new SseEmitter();
+		emitters.add(emitter);
+		return emitter;
 
 	}
 
@@ -199,6 +154,49 @@ public class HystrixStreamController implements SmartLifecycle {
 	@Override
 	public void start() {
 		running = true;
+		Thread thread = new Thread(new Runnable() {
+			@Override
+			public void run() {
+				try {
+					while (running) {
+						for (SseEmitter emitter : emitters) {
+							List<String> jsonMessages = fetchMetrics();
+							if (jsonMessages.isEmpty()) {
+								emitter.send(SseEmitter.event().name("ping"));
+							}
+							else {
+								for (String json : jsonMessages) {
+									emitter.send(SseEmitter.event().data(json,
+											MediaType.TEXT_PLAIN));
+								}
+							}
+							if (!running) {
+								break;
+							}
+						}
+						// now wait the 'delay' time
+						Thread.sleep(delay);
+					}
+				}
+				catch (InterruptedException e) {
+					stop();
+					logger.debug("InterruptedException.");
+					Thread.currentThread().interrupt();
+				}
+				catch (IOException e) {
+					// debug instead of error as we expect to get these whenever a client
+					// disconnects or network issue occurs
+					logger.debug(
+							"IOException while trying to write (generally caused by client disconnecting).",
+							e);
+				}
+				catch (Exception e) {
+					logger.error("Failed to write Hystrix metrics.", e);
+				}
+				logger.debug("Stopping stream to connection");
+			}
+		}, "hystrixEmitters");
+		thread.start();
 	}
 
 	@Override
