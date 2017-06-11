@@ -61,7 +61,7 @@ public class SpringCloudNetflixRetryApplicationTests {
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		Map<String, Object> metrics = extractMetrics(response.getBody());
 		assertThat(metrics).containsEntry("type", "HystrixCommand");
-		System.err.println(metrics);
+		// System.err.println(metrics);
 	}
 
 	private ResponseEntity<String> extract(ClientHttpResponse response)

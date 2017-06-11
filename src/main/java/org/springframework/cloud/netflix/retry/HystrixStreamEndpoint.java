@@ -26,6 +26,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import org.springframework.boot.actuate.endpoint.mvc.AbstractNamedMvcEndpoint;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.AttributeAccessor;
 import org.springframework.http.MediaType;
@@ -33,18 +34,19 @@ import org.springframework.retry.RetryStatistics;
 import org.springframework.retry.policy.CircuitBreakerRetryPolicy;
 import org.springframework.retry.stats.ExponentialAverageRetryStatistics;
 import org.springframework.retry.stats.StatisticsRepository;
+import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * @author Dave Syer
  *
  */
-@RestController
-public class HystrixStreamController implements SmartLifecycle {
+@Component
+public class HystrixStreamEndpoint extends AbstractNamedMvcEndpoint
+		implements SmartLifecycle {
 
-	private static Log logger = LogFactory.getLog(HystrixStreamController.class);
+	private static Log logger = LogFactory.getLog(HystrixStreamEndpoint.class);
 
 	private long delay = 500;
 
@@ -56,13 +58,14 @@ public class HystrixStreamController implements SmartLifecycle {
 
 	private final List<SseEmitter> emitters = new ArrayList<>();
 
-	public HystrixStreamController(StatisticsRepository repository,
+	public HystrixStreamEndpoint(StatisticsRepository repository,
 			ObjectMapper objectMapper) {
+		super("hystrix", "/hystrix.stream", false);
 		this.repository = repository;
 		this.objectMapper = objectMapper;
 	}
 
-	@RequestMapping(path = "/hystrix.stream", produces = "text/event-stream")
+	@RequestMapping(path = "", produces = "text/event-stream")
 	public SseEmitter handle() {
 		SseEmitter emitter = new SseEmitter();
 		emitters.add(emitter);
@@ -77,7 +80,7 @@ public class HystrixStreamController implements SmartLifecycle {
 				HystrixMetrics metrics = new HystrixMetrics();
 				metrics.setName(stats.getName());
 				metrics.setErrorCount(stats.getErrorCount());
-				metrics.setRequestCount(getRollingStartedCount(stats));
+				metrics.setRequestCount(stats.getStartedCount());
 				metrics.setErrorPercentage(getRollingErrorRate(stats) * 100);
 				metrics.setCurrentConcurrentExecutionCount(getConcurrentCount(stats));
 				metrics.setRollingCountFailure(getRollingFailureCount(stats));
@@ -93,6 +96,10 @@ public class HystrixStreamController implements SmartLifecycle {
 		return list;
 	}
 
+	/**
+	 * @param stats
+	 * @return
+	 */
 	private double getRollingErrorRate(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
@@ -131,22 +138,19 @@ public class HystrixStreamController implements SmartLifecycle {
 		return 0;
 	}
 
-	private int getRollingStartedCount(RetryStatistics stats) {
+	private int getRollingSuccessCount(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
-			return average.getRollingStartedCount();
+			return average.getRollingStartedCount() - getRollingFailureCount(stats)
+					- getRollingFallbackSuccessCount(stats);
 		}
 		return 0;
-	}
-
-	private int getRollingSuccessCount(RetryStatistics stats) {
-		return getRollingStartedCount(stats) - getRollingFailureCount(stats);
 	}
 
 	private int getRollingFailureCount(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
-			return average.getRollingAbortCount() + getRollingFallbackSuccessCount(stats);
+			return average.getRollingAbortCount();
 		}
 		return 0;
 	}
