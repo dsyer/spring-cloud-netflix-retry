@@ -3,6 +3,7 @@ package org.springframrework.cloud.netflix.retry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.netflix.hystrix.dashboard.EnableHystrixDashboard;
 import org.springframework.context.annotation.Bean;
 import org.springframework.retry.RetryListener;
 import org.springframework.retry.RetryStatistics;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @SpringBootApplication
 @EnableRetry(proxyTargetClass = true)
+@EnableHystrixDashboard
 public class SpringCloudNetflixRetryApplication {
 
 	@Bean
@@ -64,7 +66,7 @@ class MyController {
 	String recover() {
 		throw new RuntimeException("Planned");
 	}
-	
+
 	@Recover
 	String fallback() {
 		return "Recovery";
