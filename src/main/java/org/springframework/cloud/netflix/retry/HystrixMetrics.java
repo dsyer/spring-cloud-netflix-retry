@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframrework.cloud.netflix.retry;
+package org.springframework.cloud.netflix.retry;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 

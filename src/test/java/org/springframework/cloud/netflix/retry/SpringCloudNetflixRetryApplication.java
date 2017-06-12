@@ -1,4 +1,4 @@
-package org.springframrework.cloud.netflix.retry;
+package org.springframework.cloud.netflix.retry;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
@@ -49,9 +49,14 @@ class MyController {
 	@Autowired
 	private StatisticsRepository repository;
 
-	@CircuitBreaker(label = "home")
 	@RequestMapping("/")
 	Iterable<RetryStatistics> home() {
+		return repository.findAll();
+	}
+
+	@CircuitBreaker(label = "home")
+	@RequestMapping("/all")
+	Iterable<RetryStatistics> all() {
 		return repository.findAll();
 	}
 

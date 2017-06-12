@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframrework.cloud.netflix.retry;
+package org.springframework.cloud.netflix.retry;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -22,8 +22,12 @@ import java.util.List;
 
 import javax.servlet.http.HttpServletResponse;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.AttributeAccessor;
 import org.springframework.retry.RetryStatistics;
@@ -32,9 +36,6 @@ import org.springframework.retry.stats.ExponentialAverageRetryStatistics;
 import org.springframework.retry.stats.StatisticsRepository;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * @author Dave Syer
@@ -121,7 +122,7 @@ public class HystrixStreamController implements SmartLifecycle {
 				HystrixMetrics metrics = new HystrixMetrics();
 				metrics.setName(stats.getName());
 				metrics.setErrorCount(stats.getErrorCount());
-				metrics.setRequestCount(stats.getStartedCount());
+				metrics.setRequestCount(getRollingStartedCount(stats));
 				metrics.setErrorPercentage(getRollingErrorRate(stats) * 100);
 				metrics.setCurrentConcurrentExecutionCount(getConcurrentCount(stats));
 				metrics.setRollingCountFailure(getRollingFailureCount(stats));
@@ -137,10 +138,6 @@ public class HystrixStreamController implements SmartLifecycle {
 		return list;
 	}
 
-	/**
-	 * @param stats
-	 * @return
-	 */
 	private double getRollingErrorRate(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
@@ -155,16 +152,18 @@ public class HystrixStreamController implements SmartLifecycle {
 
 	private boolean isCircuitBreakerOpen(RetryStatistics stats) {
 		if (stats instanceof AttributeAccessor) {
-			Object attribute = ((AttributeAccessor) stats).getAttribute(CircuitBreakerRetryPolicy.CIRCUIT_OPEN);
-			return attribute==null ? false : (Boolean) attribute;
+			Object attribute = ((AttributeAccessor) stats)
+					.getAttribute(CircuitBreakerRetryPolicy.CIRCUIT_OPEN);
+			return attribute == null ? false : (Boolean) attribute;
 		}
 		return false;
 	}
 
 	private int getRollingFallbackShortCircuitedCount(RetryStatistics stats) {
 		if (stats instanceof AttributeAccessor) {
-			Object attribute = ((AttributeAccessor) stats).getAttribute(CircuitBreakerRetryPolicy.CIRCUIT_SHORT_COUNT);
-			return attribute==null ? 0 : (Integer) attribute;
+			Object attribute = ((AttributeAccessor) stats)
+					.getAttribute(CircuitBreakerRetryPolicy.CIRCUIT_SHORT_COUNT);
+			return attribute == null ? 0 : (Integer) attribute;
 		}
 		return 0;
 	}
@@ -177,19 +176,22 @@ public class HystrixStreamController implements SmartLifecycle {
 		return 0;
 	}
 
-	private int getRollingSuccessCount(RetryStatistics stats) {
+	private int getRollingStartedCount(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
-			return average.getRollingStartedCount() - getRollingFailureCount(stats)
-					- getRollingFallbackSuccessCount(stats);
+			return average.getRollingStartedCount();
 		}
 		return 0;
+	}
+
+	private int getRollingSuccessCount(RetryStatistics stats) {
+		return getRollingStartedCount(stats) - getRollingFailureCount(stats);
 	}
 
 	private int getRollingFailureCount(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
-			return average.getRollingAbortCount();
+			return average.getRollingAbortCount() + getRollingFallbackSuccessCount(stats);
 		}
 		return 0;
 	}

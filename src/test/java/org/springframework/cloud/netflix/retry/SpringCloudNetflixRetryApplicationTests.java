@@ -1,4 +1,4 @@
-package org.springframrework.cloud.netflix.retry;
+package org.springframework.cloud.netflix.retry;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,7 +52,7 @@ public class SpringCloudNetflixRetryApplicationTests {
 	@Test
 	public void contextLoads() throws Exception {
 		rest.getInterceptors().add(new NonClosingInterceptor());
-		rest.getForEntity("http://localhost:" + port + "/", String.class);
+		rest.getForEntity("http://localhost:" + port + "/all", String.class);
 		ResponseEntity<String> response = rest.execute(
 				new URI("http://localhost:" + port + "/hystrix.stream"), HttpMethod.GET,
 				null, this::extract);
