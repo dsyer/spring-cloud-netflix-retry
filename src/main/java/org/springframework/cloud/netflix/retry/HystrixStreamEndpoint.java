@@ -16,9 +16,9 @@
 
 package org.springframework.cloud.netflix.retry;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,7 +50,7 @@ public class HystrixStreamEndpoint extends AbstractNamedMvcEndpoint
 
 	private long delay = 500;
 
-	private boolean running = false;
+	private AtomicBoolean running = new AtomicBoolean(false);
 
 	private final StatisticsRepository repository;
 
@@ -67,7 +67,8 @@ public class HystrixStreamEndpoint extends AbstractNamedMvcEndpoint
 
 	@RequestMapping(path = "", produces = "text/event-stream")
 	public SseEmitter handle() {
-		SseEmitter emitter = new SseEmitter();
+		// No timeout, otherwise the container will disconnect the client
+		SseEmitter emitter = new SseEmitter(Long.MAX_VALUE);
 		emitters.add(emitter);
 		return emitter;
 
@@ -80,7 +81,10 @@ public class HystrixStreamEndpoint extends AbstractNamedMvcEndpoint
 				HystrixMetrics metrics = new HystrixMetrics();
 				metrics.setName(stats.getName());
 				metrics.setErrorCount(stats.getErrorCount());
-				metrics.setRequestCount(stats.getStartedCount());
+				// The "request count" actually gets divided by the window size to
+				// calculate a rate in the hystrix dashboard, so it's the rolling value we
+				// need here, not the total count:
+				metrics.setRequestCount(getRollingStartedCount(stats));
 				metrics.setErrorPercentage(getRollingErrorRate(stats) * 100);
 				metrics.setCurrentConcurrentExecutionCount(getConcurrentCount(stats));
 				metrics.setRollingCountFailure(getRollingFailureCount(stats));
@@ -96,10 +100,6 @@ public class HystrixStreamEndpoint extends AbstractNamedMvcEndpoint
 		return list;
 	}
 
-	/**
-	 * @param stats
-	 * @return
-	 */
 	private double getRollingErrorRate(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
@@ -138,79 +138,95 @@ public class HystrixStreamEndpoint extends AbstractNamedMvcEndpoint
 		return 0;
 	}
 
-	private int getRollingSuccessCount(RetryStatistics stats) {
+	private int getRollingStartedCount(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
-			return average.getRollingStartedCount() - getRollingFailureCount(stats)
-					- getRollingFallbackSuccessCount(stats);
+			return average.getRollingStartedCount();
 		}
 		return 0;
+	}
+
+	private int getRollingSuccessCount(RetryStatistics stats) {
+		return getRollingStartedCount(stats) - getRollingFailureCount(stats);
 	}
 
 	private int getRollingFailureCount(RetryStatistics stats) {
 		if (stats instanceof ExponentialAverageRetryStatistics) {
 			ExponentialAverageRetryStatistics average = (ExponentialAverageRetryStatistics) stats;
-			return average.getRollingAbortCount();
+			return average.getRollingAbortCount() + getRollingFallbackSuccessCount(stats);
 		}
 		return 0;
 	}
 
 	@Override
 	public void start() {
-		running = true;
-		Thread thread = new Thread(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					while (running) {
+		if (running.compareAndSet(false, true)) {
+			Thread thread = new Thread(new Runnable() {
+				@Override
+				public void run() {
+					while (running.get()) {
+						List<SseEmitter> emitters;
+						synchronized (this) {
+							emitters = new ArrayList<>(
+									HystrixStreamEndpoint.this.emitters);
+						}
 						for (SseEmitter emitter : emitters) {
-							List<String> jsonMessages = fetchMetrics();
-							if (jsonMessages.isEmpty()) {
-								emitter.send(SseEmitter.event().name("ping"));
-							}
-							else {
-								for (String json : jsonMessages) {
-									emitter.send(SseEmitter.event().data(json,
-											MediaType.TEXT_PLAIN));
+							try {
+								List<String> jsonMessages = fetchMetrics();
+								if (jsonMessages.isEmpty()) {
+									emitter.send(SseEmitter.event().name("ping"));
+								}
+								else {
+									for (String json : jsonMessages) {
+										emitter.send(SseEmitter.event().data(json,
+												MediaType.TEXT_PLAIN));
+									}
 								}
 							}
-							if (!running) {
+							catch (Exception e) {
+								logger.debug(
+										"Failed to write Hystrix metrics, disconnecting client.",
+										e);
+								synchronized (this) {
+									HystrixStreamEndpoint.this.emitters
+											.remove(HystrixStreamEndpoint.this.emitters
+													.indexOf(emitter));
+								}
+							}
+							if (!running.get()) {
 								break;
 							}
 						}
-						// now wait the 'delay' time
-						Thread.sleep(delay);
+						try {
+							// now wait the 'delay' time
+							Thread.sleep(delay);
+						}
+						catch (InterruptedException e) {
+							stop();
+							logger.debug("InterruptedException.");
+							Thread.currentThread().interrupt();
+						}
 					}
+
+					logger.debug("Stopping stream to connection");
 				}
-				catch (InterruptedException e) {
-					stop();
-					logger.debug("InterruptedException.");
-					Thread.currentThread().interrupt();
-				}
-				catch (IOException e) {
-					// debug instead of error as we expect to get these whenever a client
-					// disconnects or network issue occurs
-					logger.debug(
-							"IOException while trying to write (generally caused by client disconnecting).",
-							e);
-				}
-				catch (Exception e) {
-					logger.error("Failed to write Hystrix metrics.", e);
-				}
-				logger.debug("Stopping stream to connection");
-			}
-		}, "hystrixEmitters");
-		thread.start();
+			}, "hystrixEmitters");
+			thread.start();
+		}
 	}
 
 	@Override
 	public void stop() {
-		running = false;
+		if (running.compareAndSet(true, false)) {
+			synchronized (this) {
+				this.emitters.clear();
+			}
+		}
 	}
 
 	@Override
 	public boolean isRunning() {
-		return running;
+		return running.get();
 	}
 
 	@Override
