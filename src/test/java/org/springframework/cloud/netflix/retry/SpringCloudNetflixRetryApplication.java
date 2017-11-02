@@ -10,8 +10,6 @@ import org.springframework.retry.RetryStatistics;
 import org.springframework.retry.annotation.CircuitBreaker;
 import org.springframework.retry.annotation.EnableRetry;
 import org.springframework.retry.annotation.Recover;
-import org.springframework.retry.policy.MapRetryContextCache;
-import org.springframework.retry.policy.RetryContextCache;
 import org.springframework.retry.stats.DefaultStatisticsRepository;
 import org.springframework.retry.stats.StatisticsListener;
 import org.springframework.retry.stats.StatisticsRepository;
@@ -26,11 +24,6 @@ public class SpringCloudNetflixRetryApplication {
 	@Bean
 	public StatisticsRepository statisticsRepository() {
 		return new DefaultStatisticsRepository();
-	}
-
-	@Bean
-	public RetryContextCache retryContextCache() {
-		return new MapRetryContextCache();
 	}
 
 	@Bean
